@@ -1,4 +1,7 @@
+"""Test that downloader raises on 403 (WAF bypass is now handled by OpenClaw agent)."""
+
 from pathlib import Path
+import pytest
 import requests
 
 from estimates_monitor import downloader
@@ -9,7 +12,9 @@ class DummyResp:
         self.status_code = status_code
 
     def raise_for_status(self):
-        raise requests.HTTPError(response=self)
+        exc = requests.HTTPError(response=self)
+        exc.response = self
+        raise exc
 
 
 class DummySession:
@@ -21,27 +26,17 @@ class DummySession:
         return DummyResp(status_code=403)
 
 
-def test_download_pdf_deterministic_uses_playwright_on_403(tmp_path, monkeypatch):
-    # Force requests path to 403
+def test_download_pdf_deterministic_raises_on_403(tmp_path):
+    """When ParlInfo returns 403, downloader should raise rather than
+    attempting its own browser fallback.  The OpenClaw agent handles WAF bypass."""
     sess = DummySession()
 
-    # Mock playwright byte fetcher
-    monkeypatch.setattr(
-        downloader,
-        "_download_pdf_bytes_with_playwright",
-        lambda url, profile_dir, timeout_ms=60000, referer_url=None, verbose=False: b"%PDF-1.4 mocked pdf bytes",
-    )
-
-    out = downloader.download_pdf_deterministic(
-        "https://parlinfo.aph.gov.au/parlInfo/download/x.pdf#frag",
-        base_name="test",
-        session=sess,
-        out_dir=tmp_path,
-        playwright_profile_dir=tmp_path / "profile",
-        verbose=True,
-    )
+    with pytest.raises(Exception):
+        downloader.download_pdf_deterministic(
+            "https://parlinfo.aph.gov.au/parlInfo/download/x.pdf#frag",
+            base_name="test",
+            session=sess,
+            out_dir=tmp_path,
+        )
 
     assert sess.calls == 1
-    assert Path(out["path"]).exists()
-    assert out["bytes"] > 0
-    assert out["sha256"]

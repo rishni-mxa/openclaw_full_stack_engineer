@@ -1,39 +1,50 @@
-Feature: APH Senate Estimates transcript monitor -> X thread generation + approval-publish flow
+Feature: APH Senate Estimates transcript monitor → X thread generation + approval-publish flow
 
 Goal
-- Detect newly "Published in full" transcripts from APH Estimates Transcript Schedule and produce X (formerly Twitter) threads summarising each transcript for Rish to review and approve before publishing.
+- Detect newly "Published in full" transcripts from the APH Estimates Transcript Schedule, download the transcript PDF, extract text, summarise into an X (Twitter) thread, and publish after explicit human approval.
+- Runs as a daily OpenClaw cron job with no human involvement for the detection + download steps. Human approval is required only before publishing to X.
+
+Architecture overview
+- **Python library** (`estimates_monitor`): pure data pipeline — schedule parsing, PDF URL resolution, deterministic download, text extraction, thread generation. No browser automation; uses `requests` only.
+- **OpenClaw agent** (cron job): orchestrates the pipeline. Uses `exec` to run the Python library, the `browser` tool to bypass ParlInfo's Azure WAF when needed, and messaging to deliver results / request approval.
+- **OpenClaw cron**: daily recurring isolated job that triggers the agent turn automatically.
 
 High-level flow
-1. Scrape the schedule page for transcript entries marked "Published in full".
-2. For each new entry (not recorded in state.json), fetch its detail page and download the PDF transcript.
-3. Extract text from the PDF using markitdown (or an injected extractor for testability).
-4. Summarize the transcript into a top-down X thread using OpenAI (gpt-5-mini).
-5. Save the generated thread to a pending store under data/pending/<thread_id>.json and notify the main agent for human approval.
-6. On explicit approval from the main agent, publish the thread via the X API as real posts (thread created by posting a root post then replying to build the thread). Update pending state to published and record published IDs in state.json.
+1. OpenClaw cron fires daily (e.g. 8am AEST).
+2. Agent runs `exec` → Python CLI (`latest --json`) to check the APH schedule for new "Published in full" transcripts.
+3. If a new transcript is found, the Python CLI returns the ParlInfo display URL and resolved PDF URL.
+4. Agent attempts PDF download via Python CLI (`download-latest`). If download fails with 403 (WAF), agent uses its `browser` tool to:
+   a. Navigate to ParlInfo display page.
+   b. Wait for WAF JS challenge to resolve (`wait --load networkidle`).
+   c. Download the PDF (`download` command or `run-code` with `page.waitForEvent('download')`).
+5. Agent runs text extraction (MarkItDown) on the downloaded PDF.
+6. Agent runs summarisation (map-reduce with LLM) to produce an X thread draft.
+7. Draft saved to `data/pending/<thread_id>.json` and agent announces to the user's chat for approval.
+8. On explicit approval from the user, agent publishes via X API (thread: root post + replies). Updates state to `published`.
 
-ParlInfo WAF (Path A) — new requirement
-- ParlInfo (parlinfo.aph.gov.au) is protected by an Azure WAF that may present an interactive challenge when first accessed from a new browser profile or environment. The system MUST support a one-time interactive unlock step performed by a human operator to establish a persistent browser profile that can be used by automated runs.
-- This is a required precondition for automation: automated fetching of ParlInfo pages is only expected to succeed after the one-time setup completes successfully.
-
-Scenarios
-- First-run setup (interactive): Operator runs parlinfo-setup <url>. This launches a headed browser (Playwright persistent context) using a profile directory (e.g. data/playwright-profile/). The operator completes the WAF/interactive challenge (if shown), verifies access to the given ParlInfo page, then exits the browser. The profile directory is persisted for use by automated fetches.
-- Steady-state automated runs: Automated processes run headless and use the persisted Playwright profile to fetch ParlInfo pages. Normal fetching is by HTTP requests; on 403/blocked responses the system falls back to Playwright using the persisted profile. If the profile no longer satisfies the WAF (e.g. cookies expired or cleared), operators must re-run parlinfo-setup to refresh the profile.
+ParlInfo WAF handling
+- ParlInfo (parlinfo.aph.gov.au) is protected by an Azure WAF JS Challenge that blocks non-browser clients (HTTP 403).
+- The APH schedule page itself has NO WAF — `requests` works fine.
+- WAF bypass is handled by the OpenClaw agent's `browser` tool (managed `openclaw` Chrome profile, headed mode, persistent cookies). The Python library does NOT contain any browser automation code.
+- The `openclaw` browser profile persists cookies across sessions, so the WAF challenge typically only needs to be solved once per profile.
 
 Non-goals
-- Automatic posting without an explicit approval step.
-- Attempting to circumvent WAF protections or to automate bypass of interactive challenge without human oversight.
+- Automatic posting without explicit human approval.
+- Browser automation inside the Python library (delegated to OpenClaw).
+- Playwright as a Python dependency.
 
 Outputs
-- Updated SPEC.md, PLAN.md, TASKS.md, UAT.md reflecting approval-gate -> publish workflow and Path A WAF setup
-- Minimal Python package with modules: downloader, parser, summarizer, storage (state), x_client (API client), cli entrypoint
-- state.json to track seen transcripts and published post IDs
-- Pending thread storage under data/pending/
-- Unit tests for thread splitting & approval flow state transitions
+- Python package `estimates_monitor` with modules: schedule, parlinfo, fetcher, downloader, parser, summarizer, storage, cli
+- State tracking via `data/state.json` (seen transcripts, download metadata, published post IDs)
+- Pending thread storage under `data/pending/`
+- OpenClaw cron job configuration for daily monitoring
+- Unit tests + fixtures (schedule HTML, detail HTML, PDF mock)
 
-Constraints & choices (summary)
-- Stable IDs: Use canonical transcript page URLs + generated thread_id (UUID) as primary keys.
-- PDF downloads: HTTP requests preferred; Playwright fallback using persisted profile when WAF blocks direct requests.
-- markitdown: use Python API where practical; allow injection/mocking for tests.
-- OpenAI: chunked summarisation (map-reduce) with clear prompt templates and an output JSON schema for threads.
-- Publishing: Prefer X API (OAuth2 user context) to create real posts on approval. If X developer credentials are not available, the system will keep threads in pending state and require the main agent to provide publishing credentials or perform the publish step manually.
-- Safety: Explicit approval gate enforced; publishing only occurs after explicit approve <thread_id> CLI command from an operator or main agent invocation.
+Constraints & choices
+- Stable IDs: Use canonical transcript page URLs as primary keys, generated `thread_id` (UUID) for pending threads.
+- PDF downloads: HTTP `requests` only in Python; 403 fallback handled by OpenClaw browser at orchestration layer.
+- MarkItDown: Python API preferred; CLI fallback; injectable for tests.
+- LLM summarisation: map-reduce chunking with structured JSON output for threads.
+- Publishing: X API (OAuth2 user context). If credentials unavailable, threads remain in pending state. Dry-run mode available.
+- Safety: Explicit approval gate enforced before any X publishing.
+- Dependencies (Python): `requests`, `beautifulsoup4`, `markitdown`, `openai` (or HTTP), `pytest`. No `playwright`.

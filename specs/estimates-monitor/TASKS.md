@@ -1,48 +1,78 @@
-TASKS.md - Implementation tasks (Spec Kit Lite) — updated for approval-gate + X API publish + ParlInfo Path A
+TASKS.md — Implementation tasks (updated 2026-02-15)
 
-Priority 1 (MVP)
-- [ ] Create specs (SPEC.md, PLAN.md, TASKS.md, UAT.md) (this set)
-- [ ] Create Python package skeleton (estimates_monitor) with modules: downloader, parser, summarizer, storage, cli, x_client
-- [ ] Implement state.json read/write helpers (storage.py)
-- [ ] Implement schedule parser that accepts HTML (parser.parse_schedule(html)) and returns list of entries with: page_url, title, published_date, pdf_url (optional), status_text
-- [ ] Implement downloader that given a pdf_url saves file to data/pdfs and returns path
-- [ ] Implement parser wrapper that uses markitdown to extract text (parser.extract_text(pdf_path)) — allow injection/mocking of markitdown for tests
-- [ ] Implement summarizer that calls OpenAI (summarizer.summarize(text)) with chunking and returns thread JSON
-- [ ] Implement pending thread store: save generated threads to data/pending/<thread_id>.json with status metadata
-- [ ] CLI entrypoint commands: plan (generate thread + save pending), approve <id> (publish via x_client or dry-run), status (show pending/published)
-- [ ] Implement mockable x_client.py with create_post(text, reply_to_id=None) which can be swapped for a real X API client later
-- [ ] Unit tests + fixtures (schedule HTML, small PDF or text fixture)
-- [ ] Add parlinfo-setup command with clear interactive instructions: how to run, what to expect from the WAF, and where the profile is saved (data/playwright-profile/). Acceptance gate: operator can confirm post-setup that the target ParlInfo URL loads in the headed browser and the setup exits with success.
+Status legend: [x] done, [~] partially done, [ ] not started
 
-Priority 2 (Robustness)
-- [ ] Implement browser fallback to extract PDF URL if schedule page is JS-driven
-- [ ] Implement PDF retention policy and size checks
-- [ ] Add logging and retry/backoff for network calls
-- [ ] Implement resume logic for partially published threads and idempotency handling
-- [ ] Add detection for WAF challenge (Azure WAF markers) and retry logic: on HTTP 403 or challenge markers, try Playwright headless using persisted profile; if that fails, surface an error requiring parlinfo-setup.
-- [ ] Enforce safety: single-page fetch only, rate limiting (default 1 request per 10s), and limit concurrent Playwright sessions to 1 for ParlInfo.
+Phase 1: Schedule detection + PDF download (DONE)
+- [x] Python package skeleton (`estimates_monitor`) with modules
+- [x] `storage.py` — state.json read/write helpers (seen, posted, mark_seen, update_seen, is_posted, mark_posted)
+- [x] `schedule.py` — parse APH schedule HTML, select latest "Published in full" by ref_no descending
+- [x] `parlinfo.py` — extract PDF URL from ParlInfo display page HTML (prefer toc_pdf)
+- [x] `fetcher.py` — requests-only HTML fetch with WAF detection helper
+- [x] `downloader.py` — deterministic PDF download via requests with content-hash naming
+- [x] `cli.py` — CLI commands: `latest`, `latest --absolute`, `resolve-pdf <url>`, `download-latest`
+- [x] Tests: schedule parsing, ordering, committee fallback, PDF link extraction, storage, downloader 403 handling
+- [x] Remove Playwright from Python library (browser WAF bypass moved to OpenClaw agent)
 
-Priority 3 (Optional enhancements)
-- [ ] Real web integration tests (recorded HTTP fixtures)
-- [ ] Dockerfile and CI config with tests
-- [ ] Integrate with main agent notifications (via provided interface)
+Phase 2: Text extraction + summarisation
+- [~] `parser.py` — MarkItDown PDF text extraction (implemented, needs validation with real transcript PDF)
+- [~] `summarizer.py` — map-reduce LLM summarisation to X thread JSON (implemented, needs prompt tuning)
+- [ ] Install `markitdown` and validate extraction against a real Senate Estimates transcript PDF
+- [ ] Tune summarisation prompts for Australian political context (committee names, senator names, department names)
+- [ ] Add thread length validation (each tweet ≤ 280 chars, thread ≤ 8 tweets)
+- [ ] Test: summariser with mock LLM returns valid thread JSON structure
 
-Tests and verification
-- [ ] Offline deterministic tests: unit tests for schedule parsing, PDF parsing (using local PDF fixtures), summariser logic (mock OpenAI), and x_client mock tests.
-- [ ] Manual verification checklist: parlinfo-setup run, confirm profile saved, fetch_html fallback triggers Playwright correctly, and retry flow requires re-setup when appropriate.
+Phase 3: Pending thread store + approval gate
+- [ ] Create `data/pending/` directory structure
+- [ ] Implement pending store: save thread to `data/pending/<thread_id>.json` with metadata (thread_id, transcript_id, title, pdf_url, tweets[], status, created_at)
+- [ ] Implement status transitions: pending → approved → published / failed
+- [ ] CLI commands: `status` (list pending/published), `approve <thread_id>` (with --dry-run), `reject <thread_id>`
+- [ ] Dry-run mode: output exact per-tweet payloads without API calls
+- [ ] Test: approval state transitions, reject, resume from partial failure
 
-Documentation
-- [ ] Update README and CLI help to document parlinfo-setup, profile storage location and permissions, WAF detection behavior, and operator instructions for re-running setup.
+Phase 4: X API publishing
+- [ ] Implement `x_client.py` with mockable `create_post(text, reply_to_id=None)` and `create_thread(tweets[])`
+- [ ] Thread creation: root post → reply chain with correct `reply_to_id` threading
+- [ ] Record published post IDs in pending store and `state.json` via `mark_posted()`
+- [ ] Handle mid-thread failure: record last successful post, allow `approve` to resume
+- [ ] Idempotency: skip publish if `is_posted()` returns True
+- [ ] OAuth2 credential management (env vars: `X_API_KEY`, `X_API_SECRET`, `X_ACCESS_TOKEN`, `X_ACCESS_SECRET`)
+- [ ] Test: mock X client, thread creation, partial failure + resume, idempotency
+
+Phase 5: OpenClaw agent integration
+- [ ] Create OpenClaw cron job: daily isolated run at 8am AEST
+  ```
+  openclaw cron add \
+    --name "Estimates transcript check" \
+    --cron "0 8 * * *" \
+    --tz "Australia/Sydney" \
+    --session isolated \
+    --message "<agent prompt for full pipeline>" \
+    --announce \
+    --channel <user_channel> \
+    --to "<user_target>"
+  ```
+- [ ] Write agent prompt that covers: check schedule → download PDF → extract text → generate thread → announce for approval
+- [ ] Document the browser fallback flow: agent detects 403 from Python CLI → uses `browser` tool to navigate ParlInfo → downloads PDF → saves to `data/pdfs/`
+- [ ] Test cron job fires and agent completes pipeline end-to-end (manual verification)
+- [ ] Document approval flow: user receives announce → replies with approval → agent publishes
+
+Phase 6: Robustness + polish
+- [ ] Add structured logging throughout pipeline
+- [ ] Rate limiting for ParlInfo requests (respect retry-after headers)
+- [ ] PDF size/validity checks before extraction
+- [ ] PDF retention policy (configurable max age/count)
+- [ ] Graceful handling of schedule page changes (new URL patterns, table structure changes)
+- [ ] Error reporting: agent announces failures with actionable detail (which step failed, what to do)
+
+Tests summary
+- [x] 18 existing tests (all passing): schedule parsing, ordering, ref_no sort, PDF link extraction, committee fallback, 403 handling, storage, downloader, CLI download-latest
+- [ ] Phase 2 tests: MarkItDown extraction, summariser prompt/output validation
+- [ ] Phase 3 tests: pending store CRUD, approval state machine
+- [ ] Phase 4 tests: X client mock, thread creation, partial failure resume
+- [ ] Manual E2E: cron job → schedule check → download → extract → summarise → approve → publish
 
 Dev notes
-- Keep dependencies small: requests, beautifulsoup4, markitdown, playwright, openai (or HTTP to OpenAI), pytest
-- Design modules for testability: allow injection of HTTP client, OpenAI client, Playwright browser launcher, and X client
-
-Acceptance gates
-- parlinfo-setup present and documented with clear operator instructions; operator can run locally and confirm success.
-- WAF detection implemented and tested in mocks; fallback to Playwright using persisted profile implemented.
-- Tests: offline unit tests pass and manual verification checklist included in UAT.
-
-Constraints / Safety
-- Do NOT implement live OAuth token exchange or persist real credentials without the main agent confirming X developer credentials are available and acceptable to use.
-- Publishing must only occur after explicit approve <thread_id> action by an operator or main agent.
+- Python 3.13.7 venv at `.venv/`
+- Dependencies: `requests`, `beautifulsoup4`, `pytest` (installed). To add: `markitdown`, `openai`/HTTP, `tweepy`/HTTP.
+- No `playwright` dependency in Python — browser automation is at the OpenClaw layer.
+- All JSON output from CLI commands for agent consumption.

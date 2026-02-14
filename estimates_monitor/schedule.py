@@ -342,27 +342,19 @@ def get_latest_published(session: Optional[requests.Session] = None, is_seen_fun
             detail_html = detail_resp.text
             detail_base = getattr(detail_resp, "url", None) or chosen.page_url
         except Exception as e:
-            # If we got a 403 from ParlInfo, attempt a browser-based HTML fetcher before falling back to the committee page.
+            # If we got a 403 from ParlInfo (WAF block), fall back to the committee page.
+            # Browser-based WAF bypass is handled by the OpenClaw agent, not this library.
             resp_obj = getattr(e, 'response', None)
             resp_status = getattr(resp_obj, 'status_code', None)
             if resp_status == 403:
-                # Try the fetch_html abstraction (which will attempt a browser snapshot if needed)
-                try:
-                    from estimates_monitor.fetcher import fetch_html
-                    fetched = fetch_html(chosen.page_url, session=s if s is not requests else None)
-                    detail_html = fetched
-                    detail_base = chosen.page_url
-                    # We were able to fetch via browser fallback; do not set committee fallback
-                except Exception:
-                    # If browser fallback also failed, only then try the committee page
-                    if chosen.committee_url:
-                        fallback_resp = s.get(chosen.committee_url, headers=DEFAULT_HEADERS, timeout=timeout_s)
-                        fallback_resp.raise_for_status()
-                        detail_html = fallback_resp.text
-                        detail_base = getattr(fallback_resp, "url", None) or chosen.committee_url
-                        chosen.pdf_fallback_committee = True
-                    else:
-                        raise
+                if chosen.committee_url:
+                    fallback_resp = s.get(chosen.committee_url, headers=DEFAULT_HEADERS, timeout=timeout_s)
+                    fallback_resp.raise_for_status()
+                    detail_html = fallback_resp.text
+                    detail_base = getattr(fallback_resp, "url", None) or chosen.committee_url
+                    chosen.pdf_fallback_committee = True
+                else:
+                    raise
             else:
                 # propagate original exception for non-403 errors
                 raise

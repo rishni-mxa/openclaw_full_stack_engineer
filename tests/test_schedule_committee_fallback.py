@@ -1,4 +1,7 @@
+"""Test that 403 from ParlInfo display page falls back to committee page for PDF."""
+
 from estimates_monitor import schedule
+import requests as _requests
 
 
 class DummyResp:
@@ -9,7 +12,9 @@ class DummyResp:
 
     def raise_for_status(self):
         if self.status_code >= 400:
-            raise Exception(f"{self.status_code}")
+            exc = _requests.exceptions.HTTPError(f"{self.status_code}")
+            exc.response = self
+            raise exc
 
 
 class DummySession:
@@ -23,10 +28,7 @@ class DummySession:
         return resp
 
 
-def test_committee_fallback_resolves_media_to_aph(monkeypatch):
-    # Force fetch_html path to fail so code exercises committee fallback.
-    import estimates_monitor.fetcher as fetcher
-    monkeypatch.setattr(fetcher, "fetch_html", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("blocked")))
+def test_committee_fallback_resolves_media_to_aph():
     # Schedule page points to a ParlInfo display page which returns 403; committee page contains '/-/media/...' href
     schedule_html = '''
     <html><body><table><tbody>

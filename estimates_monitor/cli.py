@@ -87,21 +87,17 @@ def run_latest_absolute(session=None):
 
 
 def run_resolve_pdf(display_url, session=None):
-    # Fetch given parlInfo display URL and extract pdf_url without mutating state
-    # Try requests first, fall back to browser-based fetcher when blocked.
+    """Fetch given parlInfo display URL and extract pdf_url without mutating state.
+
+    Uses requests only. Raises on 403 (WAF) — browser bypass is handled by
+    the OpenClaw agent.
+    """
     import requests
     from estimates_monitor.parlinfo import extract_pdf_url
-    try:
-        s = session or requests
-        resp = s.get(display_url)
-        if getattr(resp, 'status_code', None) == 403:
-            raise requests.exceptions.HTTPError(response=resp)
-        resp.raise_for_status()
-        html = resp.text
-    except Exception:
-        # Try browser-based fetcher
-        from estimates_monitor.fetcher import fetch_html
-        html = fetch_html(display_url, session=session)
+    s = session or requests
+    resp = s.get(display_url)
+    resp.raise_for_status()
+    html = resp.text
     pdf = extract_pdf_url(display_url, html)
     return pdf
 
@@ -181,8 +177,6 @@ def run_download_latest(session=None, now_func=None, force_download: bool = Fals
         base_name,
         session=session,
         timeout=timeout_s,
-        playwright_referer_url=entry.page_url,
-        verbose=verbose,
     )
     _v(f"downloaded bytes={dl.get('bytes')} sha256={dl.get('sha256')}")
     now = (now_func or datetime.utcnow)().isoformat() + "Z"
@@ -217,12 +211,10 @@ if __name__ == "__main__":
     dl_parser = sub.add_parser("download-latest", help="Download latest published transcript PDF")
     dl_parser.add_argument("--force-download", action="store_true")
     dl_parser.add_argument("--dry-run", action="store_true", dest="dry_run")
-    dl_parser.add_argument("--timeout", type=int, default=60, help="Timeout seconds for network/browser operations")
+    dl_parser.add_argument("--timeout", type=int, default=60, help="Timeout seconds for network operations")
     dl_parser.add_argument("--verbose", action="store_true", help="Verbose logging")
     resolve = sub.add_parser("resolve-pdf", help="Resolve a ParlInfo display URL to its PDF without mutating state")
     resolve.add_argument("display_url")
-    setup = sub.add_parser("parlinfo-setup", help="Open headed browser to allow interactive ParlInfo WAF pass and save profile")
-    setup.add_argument("display_url")
     parser_arg.add_argument("--run", action="store_true")
     args = parser_arg.parse_args()
     # Provide a naive openai_call_func for manual runs that echoes prompts (developer replaces with real client)
@@ -235,47 +227,19 @@ if __name__ == "__main__":
             result = run_latest()
         print(json.dumps(result, indent=2, ensure_ascii=False))
     elif args.command == "download-latest":
-        # Watchdog: if something hangs (requests/playwright), dump a traceback.
         timeout_s = getattr(args, 'timeout', 60)
         verbose = getattr(args, 'verbose', False)
-        try:
-            import faulthandler
-            faulthandler.enable()
-            # Give a small grace period beyond the user timeout.
-            faulthandler.dump_traceback_later(timeout_s + 20, repeat=False)
-        except Exception:
-            faulthandler = None
-
-        try:
-            result = run_download_latest(
-                force_download=args.force_download,
-                dry_run=getattr(args, 'dry_run', False),
-                timeout_s=timeout_s,
-                verbose=verbose,
-            )
-        finally:
-            try:
-                if faulthandler:
-                    faulthandler.cancel_dump_traceback_later()
-            except Exception:
-                pass
-
+        result = run_download_latest(
+            force_download=args.force_download,
+            dry_run=getattr(args, 'dry_run', False),
+            timeout_s=timeout_s,
+            verbose=verbose,
+        )
         print(json.dumps(result, indent=2, ensure_ascii=False))
     elif args.command == "resolve-pdf":
         url = args.display_url
         pdf = run_resolve_pdf(url)
         print(json.dumps({"display_url": url, "pdf_url": pdf}, indent=2, ensure_ascii=False))
-    elif args.command == "parlinfo-setup":
-        # Open headed browser once for user to interactively pass WAF; uses same profile dir as fetcher.
-        url = args.display_url
-        from estimates_monitor.fetcher import _browser_fetch_with_playwright
-        profile = "data/playwright-profile"
-        print("Opening headed browser. Please interact with the page and complete any challenge. Close the browser when done.")
-        try:
-            _browser_fetch_with_playwright(url, user_data_dir=profile, prefer_headed=True)
-            print(f"Profile saved to {profile}")
-        except Exception as exc:
-            print(f"Setup failed: {exc}")
     elif args.run:
         print("Running CLI against fixtures...")
         out = main(echo_call)
