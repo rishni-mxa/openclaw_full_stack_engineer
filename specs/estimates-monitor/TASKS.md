@@ -21,40 +21,35 @@ Phase 2: Text extraction + summarisation
 - [x] Add thread length validation (each tweet ≤ 280 chars, thread ≤ 8 tweets)
 - [x] Test: summariser with mock LLM returns valid thread JSON structure
 
-Phase 3: Pending thread store + approval gate
-- [ ] Create `data/pending/` directory structure
-- [ ] Implement pending store: save thread to `data/pending/<thread_id>.json` with metadata (thread_id, transcript_id, title, pdf_url, tweets[], status, created_at)
-- [ ] Implement status transitions: pending → approved → published / failed
-- [ ] CLI commands: `status` (list pending/published), `approve <thread_id>` (with --dry-run), `reject <thread_id>`
-- [ ] Dry-run mode: output exact per-tweet payloads without API calls
-- [ ] Test: approval state transitions, reject, resume from partial failure
+Phase 3: Pending thread store + approval gate (DONE)
+- [x] Create `data/pending/` directory structure (auto-created by `pending.py`)
+- [x] Implement pending store: `pending.py` — save/load/list threads as `data/pending/<thread_id>.json` with full metadata
+- [x] Implement status transitions: pending → approved → published / failed (with retry: failed → approved)
+- [x] CLI commands: `status [--filter]`, `approve <thread_id> [--dry-run]`, `reject <thread_id>`
+- [x] Dry-run mode: output exact per-tweet payloads (text, chars, reply_to) without changing status
+- [x] Test: 16 tests covering save/load, list/filter, all transitions, terminal states, invalid transitions, CLI commands, dry-run
 
-Phase 4: X API publishing
-- [ ] Implement `x_client.py` with mockable `create_post(text, reply_to_id=None)` and `create_thread(tweets[])`
-- [ ] Thread creation: root post → reply chain with correct `reply_to_id` threading
-- [ ] Record published post IDs in pending store and `state.json` via `mark_posted()`
-- [ ] Handle mid-thread failure: record last successful post, allow `approve` to resume
-- [ ] Idempotency: skip publish if `is_posted()` returns True
-- [ ] OAuth2 credential management (env vars: `X_API_KEY`, `X_API_SECRET`, `X_ACCESS_TOKEN`, `X_ACCESS_SECRET`)
-- [ ] Test: mock X client, thread creation, partial failure + resume, idempotency
+Phase 4: X API publishing (DONE)
+- [x] Implement `x_client.py` with mockable `create_post(text, reply_to_id=None)` and `create_thread(tweets[])`
+- [x] Thread creation: root post → reply chain with correct `reply_to_id` threading
+- [x] Record published post IDs in pending store and `state.json` via `mark_posted()`
+- [x] Handle mid-thread failure: record last successful post, allow `approve` to resume from where it left off
+- [x] Idempotency: skip publish if already published
+- [x] OAuth1 credential management (env vars: `X_API_KEY`, `X_API_SECRET`, `X_ACCESS_TOKEN`, `X_ACCESS_SECRET`) via `make_post_func()`
+- [x] CLI command: `publish <thread_id>`
+- [x] Test: 10 tests — mock X client, thread creation, reply chain, partial failure + resume, idempotency, CLI publish
 
-Phase 5: OpenClaw agent integration
-- [ ] Create OpenClaw cron job: daily isolated run at 8am AEST
-  ```
-  openclaw cron add \
-    --name "Estimates transcript check" \
-    --cron "0 8 * * *" \
-    --tz "Australia/Sydney" \
-    --session isolated \
-    --message "<agent prompt for full pipeline>" \
-    --announce \
-    --channel <user_channel> \
-    --to "<user_target>"
-  ```
-- [ ] Write agent prompt that covers: check schedule → download PDF → extract text → generate thread → announce for approval
-- [ ] Document the browser fallback flow: agent detects 403 from Python CLI → uses `browser` tool to navigate ParlInfo → downloads PDF → saves to `data/pdfs/`
+Phase 5: OpenClaw agent integration (DONE)
+- [x] Create workspace skill: `skills/estimates-monitor/SKILL.md`
+  - AgentSkills-compatible frontmatter (name, description, metadata with requires.env for X API keys)
+  - Instructions covering full pipeline: check schedule → download PDF (or browser fallback on 403) → extract text → summarise → save pending thread → announce for approval
+  - Browser fallback flow: agent detects `parlinfo_blocked` from CLI JSON → uses `browser` tool to navigate ParlInfo → downloads PDF → registers via `--register-pdf`
+  - Approval flow: user says "approve" → agent runs `approve` + `publish` commands
+  - CLI command reference for all subcommands the agent needs
+- [x] Create handover document: `OPENCLAW_SETUP.md` — full setup instructions for OpenClaw agent (venv, credentials, cron job, troubleshooting)
+- [ ] Configure skill env injection in `openclaw.json`: `skills.entries.estimates-monitor.env` for X_API_KEY, X_API_SECRET, X_ACCESS_TOKEN, X_ACCESS_SECRET (user action — requires X API credentials on OpenClaw machine)
+- [ ] Create cron job on OpenClaw machine (user action — run command from OPENCLAW_SETUP.md)
 - [ ] Test cron job fires and agent completes pipeline end-to-end (manual verification)
-- [ ] Document approval flow: user receives announce → replies with approval → agent publishes
 
 Phase 6: Robustness + polish
 - [ ] Add structured logging throughout pipeline
@@ -65,14 +60,14 @@ Phase 6: Robustness + polish
 - [ ] Error reporting: agent announces failures with actionable detail (which step failed, what to do)
 
 Tests summary
-- [x] 28 existing tests (all passing): schedule parsing, ordering, ref_no sort, PDF link extraction, committee fallback, 403 handling, storage, downloader, CLI download-latest, summariser validation + pipeline
+- [x] 54 existing tests (all passing): schedule, downloader, storage, CLI, summariser, pending store, X client
 - [x] Phase 2 tests: MarkItDown extraction, summariser prompt/output validation
-- [ ] Phase 3 tests: pending store CRUD, approval state machine
-- [ ] Phase 4 tests: X client mock, thread creation, partial failure resume
+- [x] Phase 3 tests: pending store CRUD, approval state machine, CLI status/approve/reject/dry-run
+- [x] Phase 4 tests: X client mock, thread creation, reply chain, partial failure + resume, idempotency
 - [ ] Manual E2E: cron job → schedule check → download → extract → summarise → approve → publish
 
 Dev notes
 - Python 3.13.7 venv at `.venv/`
-- Dependencies: `requests`, `beautifulsoup4`, `pytest`, `markitdown[all]`, `python-dotenv` (installed). To add: `openai`/HTTP, `tweepy`/HTTP.
+- Dependencies: `requests`, `requests-oauthlib`, `beautifulsoup4`, `pytest`, `markitdown[all]`, `python-dotenv` (all in `requirements.txt`).
 - No `playwright` dependency in Python — browser automation is at the OpenClaw layer.
 - All JSON output from CLI commands for agent consumption.

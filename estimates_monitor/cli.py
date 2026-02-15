@@ -1,6 +1,6 @@
 """CLI entrypoint for estimates-monitor commands."""
 import argparse
-from estimates_monitor import downloader, storage, schedule
+from estimates_monitor import downloader, pending, storage, schedule, x_client
 from pathlib import Path
 import json
 from datetime import datetime
@@ -176,6 +176,68 @@ def run_download_latest(session=None, now_func=None, force_download: bool = Fals
     }
 
 
+# ── Pending thread commands ──────────────────────────────────────
+
+def run_status(status_filter=None):
+    """List pending/approved/published threads."""
+    threads = pending.list_threads(status=status_filter)
+    return [
+        {
+            "thread_id": t["thread_id"],
+            "title": t["title"],
+            "status": t["status"],
+            "tweets": len(t.get("tweets", [])),
+            "created_at": t.get("created_at"),
+        }
+        for t in threads
+    ]
+
+
+def run_approve(thread_id: str, dry_run: bool = False):
+    """Approve a pending thread. With --dry-run, show tweet payloads without changing status."""
+    thread = pending.load_thread(thread_id)
+    if dry_run:
+        payloads = []
+        for i, text in enumerate(thread["tweets"]):
+            payloads.append({
+                "index": i + 1,
+                "text": text,
+                "chars": len(text),
+                "reply_to": "root" if i == 0 else f"tweet_{i}",
+            })
+        return {
+            "thread_id": thread_id,
+            "title": thread["title"],
+            "status": thread["status"],
+            "dry_run": True,
+            "payloads": payloads,
+        }
+    data = pending.approve(thread_id)
+    return {
+        "thread_id": data["thread_id"],
+        "title": data["title"],
+        "status": data["status"],
+        "approved_at": data.get("approved_at"),
+    }
+
+
+def run_reject(thread_id: str):
+    """Reject a pending thread."""
+    data = pending.reject(thread_id)
+    return {
+        "thread_id": data["thread_id"],
+        "title": data["title"],
+        "status": data["status"],
+        "rejected_at": data.get("rejected_at"),
+    }
+
+
+def run_publish(thread_id: str, post_func=None):
+    """Publish an approved thread to X. Uses real API unless post_func is injected."""
+    pf = post_func or x_client.make_post_func()
+    return x_client.publish_thread(thread_id, pf)
+
+
 if __name__ == "__main__":
     parser_arg = argparse.ArgumentParser()
     sub = parser_arg.add_subparsers(dest="command")
@@ -188,6 +250,15 @@ if __name__ == "__main__":
     dl_parser.add_argument("--verbose", action="store_true", help="Verbose logging")
     resolve = sub.add_parser("resolve-pdf", help="Resolve a ParlInfo display URL to its PDF without mutating state")
     resolve.add_argument("display_url")
+    status_parser = sub.add_parser("status", help="List pending/approved/published threads")
+    status_parser.add_argument("--filter", dest="status_filter", default=None, help="Filter by status: pending, approved, published, failed, rejected")
+    approve_parser = sub.add_parser("approve", help="Approve a pending thread for publishing")
+    approve_parser.add_argument("thread_id")
+    approve_parser.add_argument("--dry-run", action="store_true", dest="dry_run", help="Show tweet payloads without changing status")
+    reject_parser = sub.add_parser("reject", help="Reject a pending thread")
+    reject_parser.add_argument("thread_id")
+    publish_parser = sub.add_parser("publish", help="Publish an approved thread to X")
+    publish_parser.add_argument("thread_id")
     args = parser_arg.parse_args()
     if args.command == "latest":
         if getattr(args, 'absolute', False):
@@ -209,3 +280,15 @@ if __name__ == "__main__":
         url = args.display_url
         pdf = run_resolve_pdf(url)
         print(json.dumps({"display_url": url, "pdf_url": pdf}, indent=2, ensure_ascii=False))
+    elif args.command == "status":
+        result = run_status(status_filter=getattr(args, 'status_filter', None))
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+    elif args.command == "approve":
+        result = run_approve(args.thread_id, dry_run=getattr(args, 'dry_run', False))
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+    elif args.command == "reject":
+        result = run_reject(args.thread_id)
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+    elif args.command == "publish":
+        result = run_publish(args.thread_id)
+        print(json.dumps(result, indent=2, ensure_ascii=False))
