@@ -33,6 +33,22 @@ def _strip_url_fragment(url: str) -> str:
     return urlunsplit((parts.scheme, parts.netloc, parts.path, parts.query, ""))
 
 
+def _cleanup_manual_download_artifacts(out_dir: Path):
+    """Remove any leftover manual_download* artifacts after a successful download.
+
+    These files can be created by ad-hoc/manual download attempts when ParlInfo
+    returns an Azure WAF HTML challenge (403) but the body is still written to a
+    .pdf filename.
+    """
+    try:
+        for p in out_dir.glob("manual_download*"):
+            if p.is_file():
+                p.unlink(missing_ok=True)
+    except Exception:
+        # best-effort cleanup only
+        return
+
+
 def download_pdf_deterministic(
     pdf_url: str,
     base_name: str,
@@ -73,4 +89,10 @@ def download_pdf_deterministic(
     filename = f"{base}_{sha[:hash_prefix_len]}.pdf"
     final_path = out_dir / filename
     Path(tmp_path).replace(final_path)
+
+    # Best-effort cleanup: if a previous manual download attempt wrote an Azure WAF
+    # HTML challenge to a file like manual_download.pdf, remove it now that we have
+    # a confirmed good PDF on disk.
+    _cleanup_manual_download_artifacts(out_dir)
+
     return {"path": str(final_path), "sha256": sha, "bytes": total}

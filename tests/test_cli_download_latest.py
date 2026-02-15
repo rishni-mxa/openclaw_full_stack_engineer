@@ -34,6 +34,10 @@ def test_download_latest_writes_file_and_updates_state(tmp_path, monkeypatch):
     monkeypatch.setattr(storage, "STATE_PATH", tmp_path / "state.json")
     monkeypatch.setattr(downloader, "PDF_DIR", tmp_path / "pdfs")
 
+    # Create a bogus leftover artifact from a failed manual download attempt
+    (tmp_path / "pdfs").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "pdfs" / "manual_download.pdf").write_bytes(b"<!doctype html>Azure WAF")
+
     data = b"%PDF-1.4 mock data"
     session = DummySession(data)
 
@@ -43,6 +47,8 @@ def test_download_latest_writes_file_and_updates_state(tmp_path, monkeypatch):
     assert result["pdf_sha256"] == expected_hash
     assert result["pdf_bytes"] == len(data)
     assert Path(result["pdf_path"]).exists()
+    # Manual artifact should be removed after successful download
+    assert not (tmp_path / "pdfs" / "manual_download.pdf").exists()
 
     state = storage.load_state()
     seen = state["seen"][entry.page_url]
