@@ -1,10 +1,6 @@
-import os
-import math
 from typing import List
 
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
-
-# Minimal wrapper for chunking and prompting. Actual OpenAI call is left as an injectable function for tests.
+# Minimal wrapper for chunking and prompting. Actual LLM call is injected for testability.
 
 def chunk_text(text: str, max_chars: int = 3500) -> List[str]:
     chunks = []

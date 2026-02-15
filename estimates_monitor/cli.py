@@ -1,48 +1,10 @@
-"""CLI entrypoint for one-pass processing"""
+"""CLI entrypoint for estimates-monitor commands."""
 import argparse
-from estimates_monitor import downloader, parser, summarizer, storage, schedule
+from estimates_monitor import downloader, storage, schedule
 from pathlib import Path
 import json
 from datetime import datetime
 import sys
-
-
-def process_entry(entry, openai_call_func):
-    # entry: dict with keys page_url, title, pdf_url, published_date
-    id_ = entry.get("page_url")
-    if storage.is_seen(id_):
-        return None
-    pdf_url = entry.get("pdf_url")
-    pdf_path = None
-    if pdf_url:
-        pdf_path = downloader.download_pdf(pdf_url, filename_hint=entry.get("title"))
-    else:
-        raise RuntimeError("No pdf_url for entry")
-    text = parser.extract_text_with_markitdown(pdf_path)
-    thread = summarizer.summarise_pipeline(text, entry.get("title"), pdf_url, openai_call_func)
-    # save draft
-    draft_dir = Path("data/drafts")
-    draft_dir.mkdir(parents=True, exist_ok=True)
-    out_path = draft_dir / (Path(id_).name.replace("/","_") + ".json")
-    with out_path.open("w", encoding="utf-8") as f:
-        json.dump({"id": id_, "title": entry.get("title"), "pdf_url": pdf_url, "thread": thread}, f, indent=2, ensure_ascii=False)
-    storage.mark_seen(id_, {"title": entry.get("title"), "pdf_url": pdf_url})
-    return str(out_path)
-
-
-def main(openai_call_func):
-    # For MVP we operate from fixtures: load fixtures/schedule_entries.json if present
-    fixture = Path("fixtures/schedule_entries.json")
-    if fixture.exists():
-        entries = json.loads(fixture.read_text(encoding="utf-8"))
-    else:
-        raise RuntimeError("No fixtures provided for MVP. Live scraping not implemented in MVP CLI.")
-    results = []
-    for e in entries:
-        r = process_entry(e, openai_call_func)
-        if r:
-            results.append(r)
-    return results
 
 
 def run_latest(session=None, now_func=None):
@@ -58,7 +20,6 @@ def run_latest(session=None, now_func=None):
         "pdf_url": entry.pdf_url,
         "published_date": published,
         "status": entry.status,
-        "pdf_fallback_committee": entry.pdf_fallback_committee,
     })
     return {
         "id": entry.page_url,
@@ -66,7 +27,6 @@ def run_latest(session=None, now_func=None):
         "pdf_url": entry.pdf_url,
         "published_date": published,
         "status": entry.status,
-        "pdf_fallback_committee": entry.pdf_fallback_committee,
     }
 
 
@@ -82,7 +42,6 @@ def run_latest_absolute(session=None):
         "pdf_url": entry.pdf_url,
         "published_date": published,
         "status": entry.status,
-        "pdf_fallback_committee": entry.pdf_fallback_committee,
     }
 
 
@@ -125,11 +84,7 @@ def run_download_latest(session=None, now_func=None, force_download: bool = Fals
         return bool(s and s.get("pdf_path"))
 
     _v("fetching schedule + selecting latest published")
-    try:
-        entry = schedule.get_latest_published(session=session, is_seen_func=_is_downloaded, timeout_s=timeout_s)
-    except TypeError:
-        # Back-compat for tests/mocks that stub get_latest_published without the new timeout_s kwarg.
-        entry = schedule.get_latest_published(session=session, is_seen_func=_is_downloaded)
+    entry = schedule.get_latest_published(session=session, is_seen_func=_is_downloaded, timeout_s=timeout_s)
     if not entry:
         _v("no entry")
         return None
@@ -139,6 +94,25 @@ def run_download_latest(session=None, now_func=None, force_download: bool = Fals
     if storage.is_posted(entry.page_url):
         _v("refusing: already posted")
         raise SystemExit(2)
+    if not entry.pdf_url and getattr(entry, 'parlinfo_blocked', False):
+        _v("ParlInfo blocked by WAF — browser bypass needed")
+        published = entry.published_date.isoformat() if entry.published_date else None
+        return {
+            "id": entry.page_url,
+            "title": entry.title,
+            "pdf_url": None,
+            "published_date": published,
+            "status": entry.status,
+            "parlinfo_blocked": True,
+            "parlinfo_url": entry.page_url,
+            "action": "browser_fetch",
+            "instructions": (
+                "ParlInfo returned 403 (WAF). Use browser tool to: "
+                f"1) Open {entry.page_url} "
+                "2) Find the PDF link containing '/toc_pdf/' "
+                "3) Download that PDF to data/pdfs/"
+            ),
+        }
     if not entry.pdf_url:
         raise RuntimeError("No pdf_url for latest entry")
 
@@ -153,7 +127,6 @@ def run_download_latest(session=None, now_func=None, force_download: bool = Fals
             "pdf_url": entry.pdf_url,
             "published_date": published,
             "status": entry.status,
-            "pdf_fallback_committee": entry.pdf_fallback_committee,
             "skipped": False,
         }
 
@@ -215,11 +188,7 @@ if __name__ == "__main__":
     dl_parser.add_argument("--verbose", action="store_true", help="Verbose logging")
     resolve = sub.add_parser("resolve-pdf", help="Resolve a ParlInfo display URL to its PDF without mutating state")
     resolve.add_argument("display_url")
-    parser_arg.add_argument("--run", action="store_true")
     args = parser_arg.parse_args()
-    # Provide a naive openai_call_func for manual runs that echoes prompts (developer replaces with real client)
-    def echo_call(prompt):
-        return {"mock": True, "prompt_sample": prompt[:100]}
     if args.command == "latest":
         if getattr(args, 'absolute', False):
             result = run_latest_absolute()
@@ -240,7 +209,3 @@ if __name__ == "__main__":
         url = args.display_url
         pdf = run_resolve_pdf(url)
         print(json.dumps({"display_url": url, "pdf_url": pdf}, indent=2, ensure_ascii=False))
-    elif args.run:
-        print("Running CLI against fixtures...")
-        out = main(echo_call)
-        print("Outputs:", out)

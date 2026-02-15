@@ -7,7 +7,7 @@ downloads via plain HTTP requests.
 
 import requests
 from pathlib import Path
-from urllib.parse import urlparse, urlsplit, urlunsplit
+from urllib.parse import urlsplit, urlunsplit
 import hashlib
 import re
 import tempfile
@@ -23,23 +23,6 @@ def _slugify(text: str) -> str:
     t = text.lower()
     t = re.sub(r"[^a-z0-9]+", "-", t).strip("-")
     return t or "transcript"
-
-
-def download_pdf(pdf_url: str, filename_hint: str = None, timeout: int = 30) -> str:
-    """Download a PDF via HTTP and return local path."""
-    resp = requests.get(pdf_url, stream=True, timeout=timeout)
-    resp.raise_for_status()
-    if filename_hint:
-        safe_name = filename_hint.replace("/", "_")
-    else:
-        p = urlparse(pdf_url)
-        safe_name = Path(p.path).name or "transcript.pdf"
-    out = PDF_DIR / safe_name
-    with out.open("wb") as f:
-        for chunk in resp.iter_content(8192):
-            if chunk:
-                f.write(chunk)
-    return str(out)
 
 
 def _strip_url_fragment(url: str) -> str:

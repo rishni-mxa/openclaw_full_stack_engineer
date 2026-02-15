@@ -30,7 +30,7 @@ def test_download_latest_writes_file_and_updates_state(tmp_path, monkeypatch):
         published_date=datetime(2026, 2, 13, 9, 0, 0),
         status="Published in full",
     )
-    monkeypatch.setattr(cli.schedule, "get_latest_published", lambda session=None, is_seen_func=None: entry)
+    monkeypatch.setattr(cli.schedule, "get_latest_published", lambda session=None, is_seen_func=None, timeout_s=60: entry)
     monkeypatch.setattr(storage, "STATE_PATH", tmp_path / "state.json")
     monkeypatch.setattr(downloader, "PDF_DIR", tmp_path / "pdfs")
 
@@ -59,7 +59,7 @@ def test_download_latest_idempotent_without_force(tmp_path, monkeypatch):
         published_date=None,
         status="Published in full",
     )
-    monkeypatch.setattr(cli.schedule, "get_latest_published", lambda session=None, is_seen_func=None: entry)
+    monkeypatch.setattr(cli.schedule, "get_latest_published", lambda session=None, is_seen_func=None, timeout_s=60: entry)
     monkeypatch.setattr(storage, "STATE_PATH", tmp_path / "state.json")
     monkeypatch.setattr(downloader, "PDF_DIR", tmp_path / "pdfs")
 
@@ -82,7 +82,7 @@ def test_download_latest_refuses_if_posted(tmp_path, monkeypatch):
         published_date=None,
         status="Published in full",
     )
-    monkeypatch.setattr(cli.schedule, "get_latest_published", lambda session=None, is_seen_func=None: entry)
+    monkeypatch.setattr(cli.schedule, "get_latest_published", lambda session=None, is_seen_func=None, timeout_s=60: entry)
     monkeypatch.setattr(storage, "STATE_PATH", tmp_path / "state.json")
     storage.mark_posted(entry.page_url, "root", [])
     try:
@@ -99,9 +99,8 @@ def test_download_latest_dry_run_resolves_without_download(tmp_path, monkeypatch
         pdf_url="https://example.org/downloads/est-dr.pdf",
         published_date=datetime(2026, 2, 13, 9, 0, 0),
         status="Published in full",
-        pdf_fallback_committee=None,
     )
-    monkeypatch.setattr(cli.schedule, "get_latest_published", lambda session=None, is_seen_func=None: entry)
+    monkeypatch.setattr(cli.schedule, "get_latest_published", lambda session=None, is_seen_func=None, timeout_s=60: entry)
     monkeypatch.setattr(storage, "STATE_PATH", tmp_path / "state.json")
     # Ensure downloader would raise if called
     monkeypatch.setattr(downloader, "download_pdf_deterministic", lambda *a, **k: (_ for _ in ()).throw(AssertionError("download called during dry-run")))

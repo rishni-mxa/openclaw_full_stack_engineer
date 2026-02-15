@@ -66,7 +66,7 @@ def is_posted(id: str) -> bool:
 def mark_posted(id: str, root_id: str, post_ids: list):
     state = load_state()
     state.setdefault("posted", {})[id] = {
-        "posted_at": __import__("datetime").datetime.utcnow().isoformat() + "Z",
+        "posted_at": __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(),
         "x_thread_root_id": root_id,
         "x_thread_post_ids": post_ids,
     }

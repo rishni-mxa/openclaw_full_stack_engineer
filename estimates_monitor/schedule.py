@@ -19,8 +19,8 @@ class TranscriptEntry:
     status: str
     committee_url: Optional[str] = None
     ref_no: Optional[int] = None
-    # True if we had to fall back to the committee page PDF instead of ParlInfo
-    pdf_fallback_committee: bool = False
+    # True if ParlInfo returned 403 (WAF block) — agent must use browser to resolve PDF
+    parlinfo_blocked: bool = False
 
 
 # Canonical schedule URL (APH has moved this at least once)
@@ -305,9 +305,6 @@ def _pick_pdf_link(html: str, base_url: str, estimate_id: str = None, id_str: st
     # Fallback: first pdf link
     return urljoin(base_url, links[0][1])
 
-    # Fallback: first pdf link
-    return urljoin(base_url, links[0][1])
-
 
 def get_latest_published(session: Optional[requests.Session] = None, is_seen_func=None, timeout_s: int = 30) -> Optional[TranscriptEntry]:
     s = session or requests
@@ -342,50 +339,26 @@ def get_latest_published(session: Optional[requests.Session] = None, is_seen_fun
             detail_html = detail_resp.text
             detail_base = getattr(detail_resp, "url", None) or chosen.page_url
         except Exception as e:
-            # If we got a 403 from ParlInfo (WAF block), fall back to the committee page.
-            # Browser-based WAF bypass is handled by the OpenClaw agent, not this library.
+            # If we got a 403 from ParlInfo (WAF block), mark the entry so the
+            # agent workflow can use its browser tool to bypass the WAF.
+            # Do NOT fall back to the committee page — it has unrelated PDFs.
             resp_obj = getattr(e, 'response', None)
             resp_status = getattr(resp_obj, 'status_code', None)
             if resp_status == 403:
-                if chosen.committee_url:
-                    fallback_resp = s.get(chosen.committee_url, headers=DEFAULT_HEADERS, timeout=timeout_s)
-                    fallback_resp.raise_for_status()
-                    detail_html = fallback_resp.text
-                    detail_base = getattr(fallback_resp, "url", None) or chosen.committee_url
-                    chosen.pdf_fallback_committee = True
-                else:
-                    raise
+                chosen.parlinfo_blocked = True
+                return chosen  # pdf_url stays None; agent handles browser bypass
             else:
                 # propagate original exception for non-403 errors
                 raise
 
-        # If this is a ParlInfo display page, prefer the specialised extractor which knows about toc_pdf/download links
+        # Try the specialised ParlInfo extractor first (knows about toc_pdf links)
         parsed_page = urlparse(chosen.page_url)
         hostname = (parsed_page.hostname or "").lower()
-        # If we fell back to the committee page due to a ParlInfo 403, avoid using the ParlInfo display URL as the base
-        # for resolving links — instead prefer the committee response base (detail_base) which will be an aph.gov.au host.
-        if "parlinfo.aph.gov.au" in hostname and not chosen.pdf_fallback_committee:
-            pdf_from_parlinfo = parlinfo.extract_pdf_url(chosen.page_url, detail_html or "")
-            if pdf_from_parlinfo:
-                chosen.pdf_url = pdf_from_parlinfo
-            else:
-                # fall through to generic scanning
-                pass
+        if "parlinfo.aph.gov.au" in hostname:
+            chosen.pdf_url = parlinfo.extract_pdf_url(chosen.page_url, detail_html or "")
 
-        # Generic HTML scanning/picking as a fallback for non-ParlInfo or when extractor didn't find anything
-        est_id, doc_id, id_str = _extract_estimate_id_parts(chosen.page_url)
-        pdf = _pick_pdf_link(detail_html, detail_base, estimate_id=est_id, id_str=id_str)
-        if pdf and not chosen.pdf_url:
-            chosen.pdf_url = pdf
-
-        # Safeguard: if we fell back to the committee page and the resolved pdf_url points at parlinfo.aph.gov.au
-        # with a path like '/-/media/...', rewrite the host to 'www.aph.gov.au' to avoid the parlinfo media 403 issue.
-        if chosen.pdf_fallback_committee and chosen.pdf_url:
-            parsed_pdf = urlparse(chosen.pdf_url)
-            # If the path indicates an APH media resource (/ -/media/...), ensure host is the public APH domain.
-            # This covers cases where resolution used an unrelated base (e.g. parlinfo or example.org in tests).
-            if parsed_pdf.path.startswith("/-/media/"):
-                # replace host with www.aph.gov.au and keep rest of URL
-                new_pdf = parsed_pdf._replace(scheme="https", netloc="www.aph.gov.au")
-                chosen.pdf_url = new_pdf.geturl()
+        # Generic fallback: scan HTML for any PDF link matching the estimate ID
+        if not chosen.pdf_url:
+            est_id, _, id_str = _extract_estimate_id_parts(chosen.page_url)
+            chosen.pdf_url = _pick_pdf_link(detail_html, detail_base, estimate_id=est_id, id_str=id_str)
     return chosen

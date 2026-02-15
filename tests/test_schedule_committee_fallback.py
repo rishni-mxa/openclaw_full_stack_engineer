@@ -1,4 +1,8 @@
-"""Test that 403 from ParlInfo display page falls back to committee page for PDF."""
+"""Test that 403 from ParlInfo sets parlinfo_blocked=True and leaves pdf_url=None.
+
+The committee page fallback was removed because it downloads unrelated PDFs
+(e.g. committee program instead of transcript).  On 403, the agent handles
+browser-based WAF bypass."""
 
 from estimates_monitor import schedule
 import requests as _requests
@@ -28,8 +32,9 @@ class DummySession:
         return resp
 
 
-def test_committee_fallback_resolves_media_to_aph():
-    # Schedule page points to a ParlInfo display page which returns 403; committee page contains '/-/media/...' href
+def test_403_sets_parlinfo_blocked_and_no_pdf():
+    """When ParlInfo returns 403, entry should have parlinfo_blocked=True and pdf_url=None.
+    The committee page should NOT be fetched (it has unrelated PDFs)."""
     schedule_html = '''
     <html><body><table><tbody>
       <tr>
@@ -42,17 +47,14 @@ def test_committee_fallback_resolves_media_to_aph():
     '''
 
     parlinfo_display_url = "https://parlinfo.aph.gov.au/parlInfo/search/display/display.w3p;query=Id:%22committees/estimate/29366/0002%22"
-    # Note: schedule base will be https://example.org so committee_url resolves relative to that in the parser
     committee_url = "https://example.org/committee/rra"
 
     parlinfo_resp = DummyResp(parlinfo_display_url, "", status_code=403)
-    committee_html = '<html><body><a href="/-/media/Estimates/rrat/add2526/RRAT.pdf">Download</a></body></html>'
-    committee_resp = DummyResp(committee_url, committee_html, status_code=200)
 
     sess = DummySession({
         "https://example.org": DummyResp("https://example.org", schedule_html, 200),
         parlinfo_display_url: parlinfo_resp,
-        committee_url: committee_resp,
+        # Committee page NOT in mapping — should never be requested
     })
 
     orig_candidates = schedule.SCHEDULE_URL_CANDIDATES
@@ -63,5 +65,7 @@ def test_committee_fallback_resolves_media_to_aph():
         schedule.SCHEDULE_URL_CANDIDATES = orig_candidates
 
     assert latest is not None
-    assert latest.pdf_fallback_committee is True
-    assert latest.pdf_url == 'https://www.aph.gov.au/-/media/Estimates/rrat/add2526/RRAT.pdf'
+    assert latest.parlinfo_blocked is True
+    assert latest.pdf_url is None
+    # Verify committee page was NOT fetched
+    assert committee_url not in sess.calls
