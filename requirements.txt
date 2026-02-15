@@ -1,0 +1,10 @@
+# estimates-monitor dependencies
+# Install: pip install -r requirements.txt
+
+# --- Runtime ---
+requests>=2.31,<3
+beautifulsoup4>=4.12,<5
+markitdown[all]>=0.1.4,<1
+
+# --- Dev / Test ---
+pytest>=8,<10

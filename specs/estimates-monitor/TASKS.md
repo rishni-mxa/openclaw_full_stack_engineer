@@ -7,19 +7,19 @@ Phase 1: Schedule detection + PDF download (DONE)
 - [x] `storage.py` — state.json read/write helpers (seen, posted, mark_seen, update_seen, is_posted, mark_posted)
 - [x] `schedule.py` — parse APH schedule HTML, select latest "Published in full" by ref_no descending
 - [x] `parlinfo.py` — extract PDF URL from ParlInfo display page HTML (prefer toc_pdf)
-- [x] `fetcher.py` — requests-only HTML fetch with WAF detection helper
+- [x] `fetcher.py` — removed (unused; all fetching via schedule.py and downloader.py)
 - [x] `downloader.py` — deterministic PDF download via requests with content-hash naming
 - [x] `cli.py` — CLI commands: `latest`, `latest --absolute`, `resolve-pdf <url>`, `download-latest`
 - [x] Tests: schedule parsing, ordering, committee fallback, PDF link extraction, storage, downloader 403 handling
 - [x] Remove Playwright from Python library (browser WAF bypass moved to OpenClaw agent)
 
 Phase 2: Text extraction + summarisation
-- [~] `parser.py` — MarkItDown PDF text extraction (implemented, needs validation with real transcript PDF)
-- [~] `summarizer.py` — map-reduce LLM summarisation to X thread JSON (implemented, needs prompt tuning)
-- [ ] Install `markitdown` and validate extraction against a real Senate Estimates transcript PDF
-- [ ] Tune summarisation prompts for Australian political context (committee names, senator names, department names)
-- [ ] Add thread length validation (each tweet ≤ 280 chars, thread ≤ 8 tweets)
-- [ ] Test: summariser with mock LLM returns valid thread JSON structure
+- [x] `parser.py` — MarkItDown PDF text extraction (validated against real 1.5MB transcript)
+- [x] `summarizer.py` — map-reduce LLM summarisation to X thread JSON (prompts externalised to `prompts/*.md`, thread validation added)
+- [x] Install `markitdown` and validate extraction against a real Senate Estimates transcript PDF
+- [x] Tune summarisation prompts for Australian political context (committee names, senator names, department names)
+- [x] Add thread length validation (each tweet ≤ 280 chars, thread ≤ 8 tweets)
+- [x] Test: summariser with mock LLM returns valid thread JSON structure
 
 Phase 3: Pending thread store + approval gate
 - [ ] Create `data/pending/` directory structure
@@ -65,14 +65,14 @@ Phase 6: Robustness + polish
 - [ ] Error reporting: agent announces failures with actionable detail (which step failed, what to do)
 
 Tests summary
-- [x] 18 existing tests (all passing): schedule parsing, ordering, ref_no sort, PDF link extraction, committee fallback, 403 handling, storage, downloader, CLI download-latest
-- [ ] Phase 2 tests: MarkItDown extraction, summariser prompt/output validation
+- [x] 28 existing tests (all passing): schedule parsing, ordering, ref_no sort, PDF link extraction, committee fallback, 403 handling, storage, downloader, CLI download-latest, summariser validation + pipeline
+- [x] Phase 2 tests: MarkItDown extraction, summariser prompt/output validation
 - [ ] Phase 3 tests: pending store CRUD, approval state machine
 - [ ] Phase 4 tests: X client mock, thread creation, partial failure resume
 - [ ] Manual E2E: cron job → schedule check → download → extract → summarise → approve → publish
 
 Dev notes
 - Python 3.13.7 venv at `.venv/`
-- Dependencies: `requests`, `beautifulsoup4`, `pytest` (installed). To add: `markitdown`, `openai`/HTTP, `tweepy`/HTTP.
+- Dependencies: `requests`, `beautifulsoup4`, `pytest`, `markitdown[all]`, `python-dotenv` (installed). To add: `openai`/HTTP, `tweepy`/HTTP.
 - No `playwright` dependency in Python — browser automation is at the OpenClaw layer.
 - All JSON output from CLI commands for agent consumption.
